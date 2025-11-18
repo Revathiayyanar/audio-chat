@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DLFE Audio Rooms</title>
+    <style>
+        /* --- GLOBAL STYLES --- */
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; background: #f0f2f5; color: #333; }
+        h1, h2, h3 { margin: 0; }
+        .container { max-width: 900px; margin: 0 auto; padding: 20px; }
+        .btn { cursor: pointer; padding: 10px 20px; border-radius: 6px; border: none; font-weight: bold; transition: 0.2s; }
+        .btn-primary { background: #007bff; color: white; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn-secondary { background: #6c757d; color: white; }
+        .btn:hover { opacity: 0.9; transform: translateY(-1px); }
+
+        /* --- VIEW 1: HOME (CATEGORIES) --- */
+        #view-home { display: flex; justify-content: center; gap: 30px; margin-top: 100px; }
+        .cat-card {
+            background: white; width: 200px; padding: 40px 20px;
+            text-align: center; border-radius: 16px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.05);
+            cursor: pointer; font-size: 1.5rem; font-weight: 700; color: #444;
+            border: 2px solid transparent;
+        }
+        .cat-card:hover { border-color: #007bff; transform: translateY(-5px); color: #007bff; }
+
+        /* --- VIEW 2: 3x3 GRID --- */
+        #view-grid { display: none; }
+        .grid-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .room-grid {
+            display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;
+        }
+        .room-card {
+            background: white; padding: 25px; border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05); text-align: center;
+            cursor: pointer; position: relative; overflow: hidden;
+        }
+        .room-card:hover { background: #f8f9fa; }
+        .room-card.full { opacity: 0.6; cursor: not-allowed; background: #e9ecef; }
+        .room-card.full::after {
+            content: "FULL"; position: absolute; top: 10px; right: -25px;
+            background: #dc3545; color: white; padding: 5px 30px;
+            transform: rotate(45deg); font-size: 0.8rem; font-weight: bold;
+        }
+        .badge {
+            display: inline-block; padding: 6px 12px; border-radius: 20px;
+            font-size: 0.85rem; margin-top: 12px; background: #e7f1ff; color: #007bff; font-weight: 600;
+        }
+        .full .badge { background: #f8d7da; color: #721c24; }
+
+        /* --- VIEW 3: AUDIO ROOM (NEW!) --- */
+        #view-room { display: none; text-align: center; }
+        .audio-interface {
+            background: #2c3e50; color: white; padding: 40px;
+            border-radius: 20px; min-height: 400px;
+            display: flex; flex-direction: column; justify-content: space-between;
+        }
+        .participants-area {
+            display: flex; flex-wrap: wrap; justify-content: center; gap: 20px;
+        }
+        
+        /* AVATAR DESIGN */
+        .avatar-wrapper { text-align: center; width: 80px; }
+        .avatar {
+            width: 60px; height: 60px; background: #95a5a6; border-radius: 50%;
+            margin: 0 auto 8px; display: flex; align-items: center; justify-content: center;
+            font-size: 1.5rem; border: 3px solid #34495e; transition: 0.2s;
+        }
+        .avatar-name { font-size: 0.8rem; color: #bdc3c7; }
+        
+        /* ACTIVE SPEAKER ANIMATION */
+        .speaking .avatar {
+            border-color: #2ecc71;
+            box-shadow: 0 0 15px #2ecc71;
+            transform: scale(1.1);
+        }
+
+        .controls-bar {
+            margin-top: 30px; display: flex; justify-content: center; gap: 20px;
+        }
+        .mic-btn {
+            width: 50px; height: 50px; border-radius: 50%; border: none;
+            background: #e74c3c; color: white; font-size: 1.2rem; cursor: pointer;
+        }
+        .mic-btn.on { background: #2ecc71; }
+
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div id="view-home">
+            <div class="cat-card" onclick="openCategory('DLFE A1')">DLFE A1</div>
+            <div class="cat-card" onclick="openCategory('DLFE B1')">DLFE B1</div>
+            <div class="cat-card" onclick="openCategory('DLFE B2')">DLFE B2</div>
+        </div>
+
+        <div id="view-grid">
+            <div class="grid-header">
+                <h2 id="cat-title">Category</h2>
+                <button class="btn btn-secondary" onclick="goHome()">Back</button>
+            </div>
+            <div class="room-grid" id="grid-container">
+                </div>
+        </div>
+
+        <div id="view-room">
+            <div class="audio-interface">
+                <div>
+                    <h2 id="room-name-display">Room Name</h2>
+                    <p style="color: #bdc3c7; margin-top: 5px;">Audio Only • <span id="user-count-display">0</span>/10 Online</p>
+                </div>
+
+                <div class="participants-area" id="avatar-container">
+                    </div>
+
+                <div class="controls-bar">
+                    <button class="mic-btn on" onclick="toggleMic(this)">🎤</button>
+                    <button class="btn btn-danger" onclick="leaveRoom()">Leave Room</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- STATE ---
+        let currentRoomInterval = null;
+
+        // --- MOCK DATA ---
+        function generateRooms() {
+            return Array.from({length: 9}, (_, i) => ({
+                id: i + 1,
+                name: `Voice Room ${i + 1}`,
+                count: Math.floor(Math.random() * 11) // Random 0-10
+            }));
+        }
+
+        // --- NAVIGATION ---
+        function openCategory(name) {
+            document.getElementById('view-home').style.display = 'none';
+            document.getElementById('view-grid').style.display = 'block';
+            document.getElementById('cat-title').innerText = name;
+            renderGrid();
+        }
+
+        function goHome() {
+            document.getElementById('view-grid').style.display = 'none';
+            document.getElementById('view-home').style.display = 'flex';
+        }
+
+        // --- RENDER GRID ---
+        function renderGrid() {
+            const grid = document.getElementById('grid-container');
+            grid.innerHTML = '';
+            const rooms = generateRooms();
+
+            rooms.forEach(room => {
+                const isFull = room.count >= 10;
+                const div = document.createElement('div');
+                div.className = `room-card ${isFull ? 'full' : ''}`;
+                div.onclick = () => joinRoom(room);
+                div.innerHTML = `
+                    <h3>${room.name}</h3>
+                    <div class="badge">${room.count} / 10 Listeners</div>
+                `;
+                grid.appendChild(div);
+            });
+        }
+
+        // --- JOIN ROOM LOGIC ---
+        function joinRoom(room) {
+            if (room.count >= 10) {
+                alert("⛔ Room is full! Max 10 participants allowed.");
+                return;
+            }
+
+            document.getElementById('view-grid').style.display = 'none';
+            document.getElementById('view-room').style.display = 'block';
+            document.getElementById('room-name-display').innerText = room.name;
+            
+            // Render Avatars (Current users + YOU)
+            renderAvatars(room.count + 1);
+            document.getElementById('user-count-display').innerText = room.count + 1;
+        }
+
+        function leaveRoom() {
+            document.getElementById('view-room').style.display = 'none';
+            document.getElementById('view-grid').style.display = 'block';
+            stopSimulation();
+        }
+
+        // --- AUDIO UI LOGIC ---
+        function renderAvatars(count) {
+            const container = document.getElementById('avatar-container');
+            container.innerHTML = '';
+
+            for (let i = 0; i < count; i++) {
+                const isMe = i === 0; // First one is 'You'
+                const wrapper = document.createElement('div');
+                wrapper.className = 'avatar-wrapper';
+                wrapper.id = `user-${i}`;
+                wrapper.innerHTML = `
+                    <div class="avatar">${isMe ? '😊' : '👤'}</div>
+                    <div class="avatar-name">${isMe ? 'You' : `User ${i}`}</div>
+                `;
+                container.appendChild(wrapper);
+            }
+            startSpeakingSimulation(count);
+        }
+
+        function toggleMic(btn) {
+            btn.classList.toggle('on');
+            if(btn.classList.contains('on')) {
+                btn.innerText = '🎤';
+                document.getElementById('user-0').classList.add('speaking');
+            } else {
+                btn.innerText = '🔇';
+                document.getElementById('user-0').classList.remove('speaking');
+            }
+        }
+
+        // --- SIMULATE "ACTIVE SPEAKER" ---
+        // This randomly makes avatars glow to look like a real conversation
+        function startSpeakingSimulation(count) {
+            if (currentRoomInterval) clearInterval(currentRoomInterval);
+            
+            currentRoomInterval = setInterval(() => {
+                // Clear all speaking
+                document.querySelectorAll('.avatar-wrapper').forEach(el => el.classList.remove('speaking'));
+                
+                // Pick a random person to "speak"
+                const randomIdx = Math.floor(Math.random() * count);
+                const user = document.getElementById(`user-${randomIdx}`);
+                if(user) user.classList.add('speaking');
+
+            }, 2000); // Change speaker every 2 seconds
+        }
+
+        function stopSimulation() {
+            if (currentRoomInterval) clearInterval(currentRoomInterval);
+        }
+    </script>
+</body>
+</html>
