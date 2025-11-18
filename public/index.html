@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Audio Room</title>
+<style>
+body{font-family:Arial;padding:20px;background:#f4f7fb;}
+.participant{background:white;padding:8px 12px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.06);margin:5px;display:inline-block;}
+audio{display:block;margin-top:6px;width:200px;}
+#join,#leave,#mute{padding:8px 12px;margin-right:5px;border:none;border-radius:8px;cursor:pointer;}
+#join{background:#2b8bf2;color:white;} 
+#leave{background:#ef4444;color:white;display:none;} 
+#mute{background:#6b7280;color:white;display:none;}
+</style>
+</head>
+<body>
+
+<h2>Audio Room (max 10)</h2>
+
+<input id="name" placeholder="Your name">
+<input id="room" placeholder="Room name">
+<button id="join">Join Room</button>
+<button id="leave">Leave Room</button>
+<button id="mute">Mute</button>
+
+<div id="participants"></div>
+
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<script>
+const socket = io("http://localhost:3000"); // Change if remote
+let localStream = null, pcs = {}, remoteAudios = {}, yourId = null, currentRoom = null, muted = false;
+
+const joinBtn = document.getElementById('join');
+const leaveBtn = document.getElementById('leave');
+const muteBtn = document.getElementById('mute');
+const participantsEl = document.getElementById('participants');
+
+joinBtn.onclick = joinRoom;
+leaveBtn.onclick = leaveRoom;
+muteBtn.onclick = toggleMute;
+
+async function joinRoom() {
+  const name = document.getElementById('name').value || 'Anonymous';
+  const room = document.getElementById('room').value || 'default';
+
+  try { localStream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch(e){ alert('Microphone access required'); return; }
+
+  joinBtn.style.display='none'; leaveBtn.style.display='inline-block'; muteBtn.style.display='inline-block';
+  document.getElementById('name').disabled = true; document.getElementById('room').disabled = true;
+
+  currentRoom = room;
+
+  socket.emit('join-room', { room, name }, ({ success, otherUsers, yourId: id }) => {
+    if (!success) { alert('Cannot join room'); resetUI(); return; }
+    yourId = id;
+    addParticipant(yourId, name, localStream, true);
+
+    if (otherUsers && otherUsers.length > 0) {
+      otherUsers.forEach(userId => createPC(userId));
+    }
+  });
+}
+
+function addParticipant(id, name, stream, isLocal=false) {
+  const div = document.createElement('div');
+  div.id = 'p_' + id;
+  div.className = 'participant';
+  div.innerHTML = `<strong>${isLocal ? 'You' : name}</strong>`;
+  const audio = document.createElement('audio');
+  audio.autoplay = true;
+  audio.controls = false;
+  if (isLocal) audio.muted = true;
+  audio.srcObject = stream;
+  div.appendChild(audio);
+  participantsEl.appendChild(div);
+  if (!isLocal) remoteAudios[id] = audio;
+}
+
+function createPC(remoteId) {
+  const pc = new RTCPeerConnection({ iceServers:[{urls:"stun:stun.l.google.com:19302"}] });
+  pcs[remoteId] = pc;
+
+  localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+  pc.ontrack = e => {
+    if (!remoteAudios[remoteId]) addParticipant(remoteId, 'Participant', e.streams[0]);
+  };
+
+  pc.onicecandidate = e => {
+    if (e.candidate) socket.emit('ice-candidate', { to: remoteId, candidate: e.candidate });
+  };
+
+  pc.createOffer().then(offer=>{
+    pc.setLocalDescription(offer);
+    socket.emit('offer', { to: remoteId, offer });
+  });
+}
+
+// Socket listeners
+socket.on('offer', async ({ from, offer }) => {
+  if (pcs[from]) return;
+
+  const pc = new RTCPeerConnection({ iceServers:[{urls:"stun:stun.l.google.com:19302"}] });
+  pcs[from] = pc;
+
+  localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+  pc.ontrack = e => { if(!remoteAudios[from]) addParticipant(from,'Participant',e.streams[0]); }
+  pc.onicecandidate = e => { if(e.candidate) socket.emit('ice-candidate',{ to: from, candidate:e.candidate }); }
+
+  await pc.setRemoteDescription(offer);
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  socket.emit('answer', { to: from, answer });
+});
+
+socket.on('answer', ({ from, answer }) => { if(pcs[from]) pcs[from].setRemoteDescription(answer); });
+socket.on('ice-candidate', ({ from, candidate }) => { if(pcs[from]) pcs[from].addIceCandidate(candidate); });
+socket.on('peer-left', ({ id }) => { if(pcs[id]) pcs[id].close(); delete pcs[id]; const el=document.getElementById('p_'+id); if(el) el.remove(); });
+socket.on('new-peer', ({ id, name }) => { if(!pcs[id]) createPC(id); });
+
+function leaveRoom() {
+  if (!currentRoom) return;
+  socket.emit('leave-room', { room: currentRoom });
+  cleanup();
+  resetUI();
+}
+
+function cleanup() {
+  for(const id in pcs) pcs[id].close(); pcs={};
+  for(const id in remoteAudios){ remoteAudios[id].srcObject=null; remoteAudios[id].remove(); } remoteAudios={};
+  if(localStream){ localStream.getTracks().forEach(t=>t.stop()); localStream=null; }
+  participantsEl.innerHTML=''; currentRoom=null; yourId=null; muted=false;
+}
+
+function resetUI() {
+  joinBtn.style.display='inline-block'; leaveBtn.style.display='none'; muteBtn.style.display='none';
+  document.getElementById('name').disabled=false; document.getElementById('room').disabled=false;
+}
+
+function toggleMute() {
+  if(!localStream) return;
+  muted = !muted;
+  localStream.getAudioTracks().forEach(t=>t.enabled=!muted);
+  muteBtn.textContent = muted ? 'Unmute' : 'Mute';
+}
+
+window.addEventListener('beforeunload', ()=>{ try{leaveRoom();}catch(e){} });
+</script>
+</body>
+</html>
